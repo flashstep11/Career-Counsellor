@@ -8,17 +8,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Exec([string]$cmd) {
-  Write-Host "> $cmd"
-  Invoke-Expression $cmd
-  if ($LASTEXITCODE -ne 0) {
-    throw "Command failed with exit code ${LASTEXITCODE}: $cmd"
-  }
-}
-
 function Test-GitRef([string]$ref) {
   & git show-ref --verify --quiet $ref
   return ($LASTEXITCODE -eq 0)
+}
+
+function Exec-Git([string[]]$gitArgs) {
+  $display = ($gitArgs | ForEach-Object {
+      if ($_ -match '\s|\(|\)|\"') { '"' + ($_ -replace '"', '\\"') + '"' } else { $_ }
+    }) -join ' '
+  Write-Host "> git $display"
+  & git @gitArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "git failed with exit code ${LASTEXITCODE}: git $display"
+  }
 }
 
 $repoRoot = (& git rev-parse --show-toplevel 2>$null)
@@ -39,15 +42,15 @@ if ($remotes -notcontains $DeployRemote) {
 }
 
 if ($PullOrigin) {
-  Exec "git fetch origin"
-  Exec "git pull --ff-only origin $SourceBranch"
+  Exec-Git @("fetch", "origin")
+  Exec-Git @("pull", "--ff-only", "origin", $SourceBranch)
 }
 
 # Ensure source branch exists locally
 $hasSource = Test-GitRef "refs/heads/$SourceBranch"
 if (-not $hasSource) {
-  Exec "git fetch origin $SourceBranch"
-  Exec "git checkout $SourceBranch"
+  Exec-Git @("fetch", "origin", $SourceBranch)
+  Exec-Git @("checkout", $SourceBranch)
 }
 
 $currentBranch = (& git branch --show-current)
@@ -69,31 +72,31 @@ if (-not $Yes) {
 $deployLocalBranch = "deploy-main"
 $hasDeployLocal = Test-GitRef "refs/heads/$deployLocalBranch"
 if (-not $hasDeployLocal) {
-  Exec "git checkout --orphan $deployLocalBranch"
+  Exec-Git @("checkout", "--orphan", $deployLocalBranch)
   # Index is empty on orphan; read the source branch tree into index+working tree
-  Exec "git read-tree -u --reset $SourceBranch"
-  Exec "git commit -m \"Deploy snapshot\""
+  Exec-Git @("read-tree", "-u", "--reset", $SourceBranch)
+  Exec-Git @("commit", "-m", "Deploy snapshot")
 } else {
-  Exec "git checkout $deployLocalBranch"
-  Exec "git read-tree -u --reset $SourceBranch"
+  Exec-Git @("checkout", $deployLocalBranch)
+  Exec-Git @("read-tree", "-u", "--reset", $SourceBranch)
 
   # If no changes vs current snapshot commit, skip commit/push
   & git diff --cached --quiet
   $noChanges = ($LASTEXITCODE -eq 0)
   if ($noChanges) {
     Write-Host "No changes to snapshot; deploy branch already matches '$SourceBranch'."
-    Exec "git checkout $currentBranch"
+    Exec-Git @("checkout", $currentBranch)
     exit 0
   }
 
   $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-  Exec "git commit -m \"Deploy snapshot ($stamp)\""
+  Exec-Git @("commit", "-m", "Deploy snapshot ($stamp)")
 }
 
 # Force-update deploy/main
-Exec "git push $DeployRemote $deployLocalBranch`:$DeployRemoteBranch --force"
+Exec-Git @("push", $DeployRemote, ("$deployLocalBranch`:$DeployRemoteBranch"), "--force")
 
 # Return to original branch
-Exec "git checkout $currentBranch"
+Exec-Git @("checkout", $currentBranch)
 
 Write-Host "Done. '$DeployRemote/$DeployRemoteBranch' now points to the latest snapshot commit."
