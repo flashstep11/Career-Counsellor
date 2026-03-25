@@ -3,6 +3,7 @@ param(
   [string]$DeployRemoteBranch = "main",
   [string]$SourceBranch = "main",
   [switch]$PullOrigin,
+  [switch]$AlwaysPush,
   [switch]$Yes
 )
 
@@ -84,13 +85,18 @@ if (-not $hasDeployLocal) {
   & git diff --cached --quiet
   $noChanges = ($LASTEXITCODE -eq 0)
   if ($noChanges) {
-    Write-Host "No changes to snapshot; deploy branch already matches '$SourceBranch'."
-    Exec-Git @("checkout", $currentBranch)
-    exit 0
-  }
+    if (-not $AlwaysPush) {
+      Write-Host "No changes to snapshot; deploy branch already matches '$SourceBranch'."
+      Exec-Git @("checkout", $currentBranch)
+      exit 0
+    }
 
-  $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-  Exec-Git @("commit", "-m", "Deploy snapshot ($stamp)")
+    $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    Exec-Git @("commit", "--allow-empty", "-m", "Deploy snapshot ($stamp)")
+  } else {
+    $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    Exec-Git @("commit", "-m", "Deploy snapshot ($stamp)")
+  }
 }
 
 # Force-update deploy/main
