@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     MAIL_SERVER: str = ""
     MAIL_STARTTLS: bool = True
     MAIL_SSL_TLS: bool = False
+
+    # Brevo transactional email API (optional). If set, OTP emails are sent via HTTPS
+    # which is more reliable on hosts that block outbound SMTP ports.
+    BREVO_API_KEY: str = ""
+
+    # OTP debugging (DO NOT enable in production)
+    OTP_DEBUG_LOG: bool = False
+    OTP_DEBUG_RETURN: bool = False
     JAAS_APP_ID: str = ""
     JAAS_KEY_ID: str = ""
 

@@ -2,6 +2,7 @@ import random
 import hashlib
 import secrets
 from datetime import datetime, timedelta
+import httpx
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 from app.core.database import get_database
 from app.config import settings
@@ -22,6 +23,67 @@ mail_conf = ConnectionConfig(
     USE_CREDENTIALS=True,
     VALIDATE_CERTS=True,
 )
+
+
+async def _send_otp_email_via_brevo_api(email: str, otp: str) -> None:
+    if not settings.BREVO_API_KEY:
+        raise RuntimeError("BREVO_API_KEY is not configured")
+
+    sender_email = (settings.MAIL_FROM or "").strip()
+    if not sender_email:
+        raise RuntimeError("MAIL_FROM must be set when using Brevo API")
+
+    sender_name = (settings.MAIL_FROM_NAME or "AlumNiti").strip() or "AlumNiti"
+
+    payload = {
+        "sender": {"name": sender_name, "email": sender_email},
+        "to": [{"email": email}],
+        "subject": "AlumNiti Verification Code",
+        "textContent": (
+            f"Your AlumNiti verification code is: {otp}\n\n"
+            f"This code expires in {OTP_TTL_MINUTES} minutes."
+        ),
+    }
+
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=20.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": settings.BREVO_API_KEY,
+                "accept": "application/json",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+
+    if resp.status_code >= 400:
+        detail = resp.text
+        if len(detail) > 500:
+            detail = detail[:500] + "…"
+        raise RuntimeError(f"Brevo API error {resp.status_code}: {detail}")
+
+
+async def _send_otp_email_via_smtp(email: str, otp: str) -> None:
+    message = MessageSchema(
+        subject="AlumNiti Verification Code",
+        recipients=[email],
+        body=(
+            f"Your AlumNiti verification code is: {otp}\n\n"
+            f"This code expires in {OTP_TTL_MINUTES} minutes."
+        ),
+        subtype="plain",
+    )
+    fm = FastMail(mail_conf)
+    await fm.send_message(message)
+
+
+async def _send_otp_email(email: str, otp: str) -> None:
+    if settings.BREVO_API_KEY:
+        await _send_otp_email_via_brevo_api(email=email, otp=otp)
+        return
+
+    await _send_otp_email_via_smtp(email=email, otp=otp)
 
 
 def _hash_otp(otp: str) -> str:
@@ -46,8 +108,8 @@ async def send_otp(email: str) -> dict:
     otp_hash = _hash_otp(otp)
     expires_at = datetime.utcnow() + timedelta(minutes=OTP_TTL_MINUTES)
 
-    # DEBUG: Print OTP to console for development
-    print(f"🔐 OTP for {email}: {otp} (expires in {OTP_TTL_MINUTES} minutes)")
+    if settings.OTP_DEBUG_LOG:
+        print(f"🔐 OTP for {email}: {otp} (expires in {OTP_TTL_MINUTES} minutes)")
 
     # Upsert so re-sends overwrite the old OTP for that email
     await db.otp_verifications.update_one(
@@ -66,22 +128,20 @@ async def send_otp(email: str) -> dict:
     )
 
     try:
-        # Send email with OTP
-        message = MessageSchema(
-            subject="AlumNiti Verification Code",
-            recipients=[email],
-            body=f"Your AlumNiti verification code is: {otp}\n\nThis code expires in {OTP_TTL_MINUTES} minutes.",
-            subtype="plain",
-        )
-        fm = FastMail(mail_conf)
-        await fm.send_message(message)
+        await _send_otp_email(email=email, otp=otp)
     except Exception as e:
         # Clean up the record so users can retry
         await db.otp_verifications.delete_one({"email": email})
-        raise RuntimeError(f"Failed to send OTP email: {e}")
+        raise RuntimeError(
+            "Failed to send OTP email: "
+            f"{e}. "
+            "If you're deploying on a platform that blocks outbound SMTP (common), "
+            "set BREVO_API_KEY to send OTP via Brevo HTTPS API instead of SMTP."
+        )
 
-    # DEBUG: Return OTP for development/testing (remove in production)
-    return {"ok": True, "debug_otp": otp}
+    if settings.OTP_DEBUG_RETURN:
+        return {"ok": True, "debug_otp": otp}
+    return {"ok": True}
 
 
 async def verify_otp(email: str, otp: str) -> str:
