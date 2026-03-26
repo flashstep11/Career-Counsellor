@@ -9,6 +9,7 @@ from bson import ObjectId
 from app.managers.meeting import MeetingManager
 from app.managers.expert import ExpertManager
 from app.core.auth_utils import require_user, get_current_user
+from app.core.time_utils import now_app_naive, parse_app_naive, app_naive_to_epoch_seconds
 
 router = APIRouter()
 meeting_manager = MeetingManager()
@@ -65,11 +66,11 @@ async def book_meeting(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        start_time = datetime.fromisoformat(request.startTime)
-        end_time = datetime.fromisoformat(request.endTime)
+        start_time = parse_app_naive(request.startTime)
+        end_time = parse_app_naive(request.endTime)
 
         # Server-side validation: reject bookings in the past
-        if start_time < datetime.now():
+        if start_time < now_app_naive():
             raise HTTPException(status_code=400, detail="Cannot book a slot in the past")
 
         meeting = await meeting_manager.book_meeting(
@@ -213,9 +214,8 @@ async def get_meeting_token(
     # Time-gate: only allow joining within 10 minutes before the meeting start
     meeting_start = meeting.get("startTime")
     if meeting_start:
-        if isinstance(meeting_start, str):
-            meeting_start = datetime.fromisoformat(meeting_start)
-        minutes_until_start = (meeting_start - datetime.now()).total_seconds() / 60
+        meeting_start = parse_app_naive(meeting_start)
+        minutes_until_start = (meeting_start - now_app_naive()).total_seconds() / 60
         if minutes_until_start > 10:
             raise HTTPException(
                 status_code=400,
@@ -254,8 +254,7 @@ async def get_meeting_token(
         )
 
     meeting_end = meeting.get("endTime")
-    if isinstance(meeting_end, str):
-        meeting_end = datetime.fromisoformat(meeting_end)
+    meeting_end = parse_app_naive(meeting_end)
 
     # --- JaaS RS256 JWT ---
     import jwt as pyjwt
@@ -266,7 +265,7 @@ async def get_meeting_token(
     key_path = Path(__file__).parent.parent / "jaas_private.key"
     private_key = key_path.read_text()
 
-    exp_ts = int(meeting_end.timestamp()) if meeting_end else int(time.time()) + 7200
+    exp_ts = app_naive_to_epoch_seconds(meeting_end) if meeting_end else int(time.time()) + 7200
     payload = {
         "iss": "chat",
         "aud": "jitsi",

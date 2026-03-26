@@ -7,6 +7,7 @@ from bson import ObjectId
 from app.core.database import get_database
 from app.models.meeting import MeetingStatus
 import uuid
+from app.core.time_utils import now_app_naive
 
 
 class MeetingManager:
@@ -93,7 +94,7 @@ class MeetingManager:
                     # Use datetime.now() (server local time) instead of
                     # datetime.utcnow() so the comparison matches the naive
                     # local-date that the frontend sends.
-                    if current > datetime.now():
+                    if current > now_app_naive():
                         print(f"    ADDED SLOT {slot_time_str}")
                         available_slots.append({
                             "startTime": current.isoformat(),
@@ -101,7 +102,7 @@ class MeetingManager:
                             "display": f"{current.strftime('%I:%M %p')} - {slot_end.strftime('%I:%M %p')}",
                         })
                     else:
-                        print(f"    SKIPPED: {current} is <= {datetime.now()} (IN THE PAST)")
+                        print(f"    SKIPPED: {current} is <= {now_app_naive()} (IN THE PAST)")
                 else:
                     print(f"    SKIPPED: {slot_time_str} is already booked")
 
@@ -149,7 +150,7 @@ class MeetingManager:
         slot_td = timedelta(minutes=slot_duration)
         result = {}
         
-        now = datetime.now()
+        now = now_app_naive()
         
         # Calculate availability for each day
         for day in range(1, num_days + 1):
